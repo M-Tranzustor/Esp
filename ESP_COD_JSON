@@ -1,0 +1,104 @@
+#include <WiFi.h>
+#include <WebSocketsClient.h>
+#include <ArduinoJson.h>
+
+const char* ssid = "YOUR_WIFI_SSID";
+const char* password = "YOUR_WIFI_PASSWORD";
+
+const char* server_ip = "192.168.1.106";
+const int server_port = 8000;
+
+float targetTemp = 0.0;
+float targetAirHum = 0.0;
+int targetSoilHum = 0;
+int lightHours = 0;
+
+float currentTemp = 23.5;
+int currentSoil = 45;
+
+WebSocketsClient webSocket;
+unsigned long lastTelemetryTime = 0;
+const int telemetryInterval = 5000;
+
+void onWebSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
+  switch(type) {
+    case WStype_CONNECTED:
+      Serial.println("[WS] Connected!");
+      break;
+
+    case WStype_DISCONNECTED:
+      Serial.println("[WS] Disconnected!");
+      break;
+
+    case WStype_TEXT:
+      Serial.printf("[WS] Received: %s\n", payload);
+      
+      StaticJsonDocument<512> doc;
+      DeserializationError error = deserializeJson(doc, payload);
+
+      if (error) {
+        Serial.print("JSON Error: ");
+        Serial.println(error.c_str());
+        return;
+      }
+
+      String command = doc["command"];
+
+      if (command == "set_profile") {
+         if (doc.containsKey("target_temp")) targetTemp = doc["target_temp"];
+         if (doc.containsKey("target_air_hum")) targetAirHum = doc["target_air_hum"];
+         if (doc.containsKey("target_soil_hum")) targetSoilHum = doc["target_soil_hum"];
+         if (doc.containsKey("light_hours")) lightHours = doc["light_hours"];
+      }
+      else {
+         if (doc.containsKey("target_temp")) targetTemp = doc["target_temp"];
+         if (doc.containsKey("target_air_hum")) targetAirHum = doc["target_air_hum"];
+         if (doc.containsKey("target_soil_hum")) targetSoilHum = doc["target_soil_hum"];
+      }
+
+      Serial.printf("TARGETS: T: %.1f | Air: %.1f | Soil: %d | Light: %d\n", 
+                    targetTemp, targetAirHum, targetSoilHum, lightHours);
+      break;
+  }
+}
+
+void sendTelemetry() {
+  StaticJsonDocument<256> doc;
+  
+  doc["type"] = "telemetry";
+  doc["temp"] = currentTemp;
+  doc["soil"] = currentSoil;
+  doc["humidity"] = 60; 
+
+  String output;
+  serializeJson(doc, output);
+  
+  webSocket.sendTXT(output);
+  
+  currentTemp += 0.1;
+  if (currentTemp > 30) currentTemp = 20;
+}
+
+void setup() {
+  Serial.begin(115200);
+  
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWi-Fi OK!");
+
+  webSocket.begin(server_ip, server_port, "/");
+  webSocket.onEvent(onWebSocketEvent);
+  webSocket.setReconnectInterval(5000); 
+}
+
+void loop() {
+  webSocket.loop(); 
+
+  if (millis() - lastTelemetryTime > telemetryInterval) {
+    lastTelemetryTime = millis();
+    sendTelemetry();
+  }
+}
